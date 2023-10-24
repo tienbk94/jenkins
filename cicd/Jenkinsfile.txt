@@ -1,0 +1,68 @@
+
+pipeline {
+    agent any
+    environment {
+        BRANCH_NAME = "${GIT_BRANCH.split("/")[1]}"
+    }
+    stages {
+        stage('Build and upload image') {
+            steps {
+                script {
+                    try {
+                        sh '''
+                            sudo cp ./env/config-${WORKSPACE}.properties ./webClient/src/main/resources/config-${WORKSPACE}.properties
+                            sudo cp ./env/application-${WORKSPACE}.properties ./webClient/src/main/resources/application-${WORKSPACE}.properties
+                            ls -la ./webClient/src/main/resources/
+                            bash ./cicd/build_image.sh $WORKSPACE ${WORKSPACE}-${IMAGES}  $IMAGE_VERSION ${URL_PRIVATE_REGISTRY} dev.Dockerfile
+                            sudo docker images "${URL_PRIVATE_REGISTRY}/${WORKSPACE}-${IMAGES}" --digests
+                        '''
+                    }
+                    catch (err) {
+                        currentBuild.result = "FAILED"
+                        throw err
+                    }
+                }
+            }
+	    }
+
+        stage('Promote to Deverlop') {
+            steps {
+                script {
+                    try {
+                        sh 'bash ./cicd/update_image_to_service_on_k8s.sh $WORKSPACE ${WORKSPACE}-${IMAGES}  $IMAGE_VERSION ${URL_PRIVATE_REGISTRY}'
+                    }
+                    catch (err) {
+                        currentBuild.result = "FAILED"
+                        throw err
+                    }
+                }
+            }
+        }
+    }
+    post {
+        always {
+            script {
+                env.GIT_COMMIT_MSG = sh (script: 'git log -1 --pretty=%B ${GIT_COMMIT}', returnStdout: true).trim()
+
+                echo "GIT_COMMIT_MSG: ${GIT_COMMIT_MSG}"
+                if (currentBuild.result == 'SUCCESS') {
+                    sh "bash ./cicd/send-noti-to-ggchat.sh '<users/all> *${params.WORKSPACE}* buid *${WORKSPACE}-${IMAGES}:$IMAGE_VERSION* *SUCCESSFULL* 👍. '"
+                } else {
+                    sh "bash ./cicd/send-noti-to-ggchat.sh '<users/all> *${params.WORKSPACE}* buid *${WORKSPACE}-${IMAGES}:$IMAGE_VERSION* *FAILD* 👎. '"   
+                }
+            }
+        }
+        // success {
+        //     echo 'I succeeded!'
+        // }
+        // unstable {
+        //     echo 'I am unstable :/'
+        // }
+        // failure {
+        //     echo 'I failed :('
+        // }
+        // changed {
+        //     echo 'Things were different before...'
+        // }
+    }
+}
